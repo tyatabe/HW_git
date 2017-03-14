@@ -1,0 +1,288 @@
+---
+title: "HW 6"
+author: "Tadaishi Yatabe-Rodriguez_ID_997887941"
+date: "March 11, 2017"
+output:
+  word_document: default
+  html_document: default
+---
+
+Loading packages
+```{r, eval=TRUE}
+library("astsa")
+library("forecast")
+```
+
+
+Setting working directory
+```{r, eval=TRUE}
+# from Tada's PC
+setwd("C:/Users/tyatabe/OneDrive/Docs/PhD Epi/Winter_17/Time series/HW")
+# From Tada's laptop
+#setwd("C:/Users/Tadaishi/SkyDrive//Docs/PhD Epi/Winter_17/Time series/Project2/Trial")
+
+df <- read.table("deaths.txt", header = T)
+head(df)
+dim(df)
+
+```
+
+
+
+
+1.a. a) Plot the raw periodogram of this data. Also plot three smoothed periodograms (modified Daniell) averaging over 3, 7, and 11 frequencies. Which amount of smoothing would you choose here? Explain.
+
+Before plotting the periodogram I decided to check if the data is stationary first by plotting it and trying transformation and differencing to make variances equal and remove any potential trend
+
+```{r, eval=TRUE}
+ts.plot(df$Deaths, xlab = "Year", ylab = "Deaths/100,000", gpars=list(xaxt="n"))
+axis(side=1, at=seq(1:90), label=df$Year)
+```
+
+Fig 1. Yearly rate of deaths by homicide and suicide (per 100,000) in Australia (1915 - 2004) 
+
+Variance seems to be unequal. There might be a decreasing trend in the 90's. There might be a cyclical component as well.
+In summary the data is not stationary as it is clear from the plot that both mean and variance are not constant, being instead a function of time.
+
+
+Transforming the data using Box Cox transformation to make the variance constant we get the next figure
+```{r, eval=TRUE}
+lambda <- BoxCox.lambda(df$Deaths)
+death_boxcox <- df$Deaths^lambda
+
+ts.plot(death_boxcox, xlab = "Year", ylab = "Deaths/100,000", gpars=list(xaxt="n"))
+axis(side=1, at=seq(1:90), label=df$Year)
+
+```
+
+Fig 2. Transformed yearly rate of deaths by homicide and suicide (per 100,000) in Australia (1915 - 2004)
+
+It does not seem to make it much better. I'll use with the Box-Cox transform to stabilize the variance still.
+
+The ACF plot seems to have a trend. The PACF plot shows an exponential decay, with change of sign, indicating that this, perhaps, is a MA(p) process, although we need to detrend first.
+```{r, eval=TRUE}
+par(mfrow = c(1,2))
+Acf(death_boxcox, main = ""); Pacf(death_boxcox, main = "")
+```
+
+Figure 3. ACF and PACF of transformed data
+
+
+Based on the results of ndiffs(), we don't need to difference to remove the trend, as it gives a retuls of zero. 
+```{r, eval=TRUE}
+ndiffs(death_boxcox)
+
+```
+
+
+
+Is the data seasonal? Estimating the number of needed seasonal differences. The nsdiffs() procedure gives the result that data is non-seasonal
+```{r, eval=TRUE}
+#nsdiffs(death_boxcox)
+```
+
+
+Now I think is OK to do work with the periodograms of the transformed data set.
+
+```{r, eval=TRUE}
+par(mfrow=c(1,2))
+spec.pgram(death_boxcox, log='no', main = ""); spec.pgram(death_boxcox, spans=3, log='no', main = ""); 
+par(mfrow=c(1,2))
+spec.pgram(death_boxcox, spans=7, log='no', main = ""); spec.pgram(death_boxcox, spans=11, log='no', main = "")
+
+```
+
+Figure 4. Left to right top to bottom: raw periodogram, smoothed periodogram using spans of 3, 7, and 11 frequencies.
+
+Based on the plot I would choose L = 7, as it seems to capture the main frequencies of the raw periodogram (between 0.0 and 0.1) while smoothing out the less important ones.
+
+
+1.b) Now use the approach outlined in lecture (using criterion Q) to choose the optimal
+amount of smoothing for the modified Daniell kernel. Consider the values L = 3, 5, 7, ··· , 45. Report the chosen value of L, and plot the corresponding smoothed periodogram. You may use the provided script sta137 smoothingPgrm.R.
+
+Using the criterion Q, the best span is 7 frequencies.
+
+```{r, eval=TRUE}
+n = length(death_boxcox)
+m = floor(n/2)
+# get the raw periodogram values at the Fourier frequencies
+pgrm.raw = spec.pgram(death_boxcox, plot=F,log='no')$spec
+
+# vector of candidate L values for smoothing
+spans = (1:(m-1))*2+1
+# vector to store criterion values for each L
+Q = numeric(length(spans))
+
+# go through the L values and compute Q for each
+for(j in 1:length(spans)){
+  L = spans[j]
+  pgrm.smooth = spec.pgram(death_boxcox, spans=L,log='no', plot=F)$spec
+  Q[j] = sum((pgrm.smooth - pgrm.raw) ^ 2) + sum((pgrm.raw)^2)/(L-1)
+}
+# plot the values
+plot(x=spans, y=Q, type='b')
+# figure out which L is best
+L = spans[which.min(Q)]; L
+
+# Plot
+par(mfrow=c(1,2))
+spec.pgram(death_boxcox, log='no', main = ""); spec.pgram(death_boxcox, spans=L, log='no', main = "")
+```
+
+Figure 5. Raw periodogram (left) and smoothed periodogram (right) using span of 7 frequencies.
+
+
+1.c) Use auto.arima() to select the most appropriate ARMA model using the AICc criterion. Write the estimated parameters and their standard errors for the selected model. Use the ACF and PACF plots to investigate whether the residuals from this model can be described as white noise.
+
+
+
+```{r, eval=TRUE}
+fit = auto.arima(death_boxcox, max.p = 8, max.q = 8, max.P = 0, max.Q = 0, max.d = 2, max.D = 0, ic = "aicc", trace = TRUE)
+fit
+```
+The best model is an ARIMA(1,0,1) with non-zero mean with AICc = -236.73, where the estimated parameters are:
+phi_1: 0.9097 (s.e.: 0.0715)
+theta_1: -0.4914 (s.e.: 0.1402)
+mu: 0.7820 (s.e.: 0.0351)
+
+
+Plotting the ACF and PACF of the residuals
+
+```{r, eval=TRUE}
+# residuals
+res = fit$residuals
+
+par(mfrow = c(1,2))
+Acf(res, lag=30, main = "")
+Pacf(res, lag=30, main = "")
+
+```
+
+Figure 6. ACF and PACF of the residuals of the ARIMA (1,0,1) model fitted to the data.
+
+The ACF and PACF plots show that 95% of the values are inside the 95% CI, indicating that the residuals resemble Gaussian white noise. 
+
+``` {r, eval=TRUE}
+# Box-Ljung test (H_0: independence of observations in time series)
+res = fit$residuals
+Box.test(res, lag=10, type="Ljung")
+```
+
+
+This is supported by the Ljung-Box test, which null hypothesis is that the observations in a time series process are independent. Our residuals, after fitting an ARIMA(1,0,1) model, have a p-value of 0.42 and therefore, we cannot reject the null with a significance level of 0.05.
+
+
+
+1.d) Plot the spectral density function of the model selected in part (c) and the smoothed
+periodogram (with the chosen amount of smoothing in part (b)) side by side. Comment.
+
+
+
+
+The smoothed periodogram looks very close to the theoretical one, indicating that the ARIMA(1,0,1) process is a good candidate for the data originating process.
+
+
+```{r, eval=TRUE}
+# Plotting
+par(mfrow=c(1,2))
+arma.spec(ar= 0.9097, ma=-0.4914, main = ""); spec.pgram(death_boxcox, spans = L, log="no", main = "")
+```
+
+Figure 7. Theoretical ARMA(0.9097, -0.4914) and observed smoothed periodograms for the deaths data.
+
+
+2.c) Plot the spectral density functions of {Xt} and {∇Xt}. Comment on the difference in
+the shapes of the plots.
+
+``` {r, eval=TRUE}
+par(mfrow=c(1,2))
+x.spec <- arma.spec(ma=0.5, var.noise = 4, log="no", main="")
+y.spec <- arma.spec(ma=-0.5, var.noise = 4, log="no", main="")
+
+```
+
+Figure 8. Spectral density functions of {Xt} (left) and {∇Xt} (right). 
+
+The spectral density of the MA(1) process shows that this is a low pass filter of white noise, as most of the spectrum is in the lower frequencies. The spectral density of the first difference of this process shows that this is a high pass filter, as most of the spectrum is in the higher frequencies.
+
+
+
+3.a) The density functions show that the spectrum remains constan for all frequencies, for {Zt} the spectrum is at 4, while for {Xt} is at 324. This is because this is not a filter, it's just multiplication by a constant.
+
+``` {r, eval=TRUE}
+par(mfrow=c(1,2))
+z.spec <- arma.spec( var.noise = 4, log="no", main="")
+x.spec <- arma.spec(var.noise = 81*4, log="no", main="")
+
+```
+
+3.b) Here the spectral density for {Xt} is higher for lower frequencies, as this process is a moving average with a window of 3, which is a low pass filter.
+
+``` {r, eval=TRUE}
+freq <- seq(from=0, to=1, by=0.01)
+spec.dens <- rep(NA, length(freq))
+
+for (i in 1:length(freq)){
+spec.dens[i] <- 4 + 16/3*cos(2*pi*freq[i])*(1 + 1/3*cos(2*pi*freq[i])) 
+}
+
+par(mfrow=c(1,2))
+z.spec <- arma.spec( var.noise = 4, log="no", main="")
+plot(freq[1:51], spec.dens[1:51], type="l", ylab="spectrum", xlab="frequency")
+
+```
+
+
+3.c) Here the spectral density for {Xt} is also higher for lower frequencies, with a bit less of weight for the higher frequencies, because there is less smothing here (as it takes only 2 values). This process is akin to an MA(2) process, which is a low pass filter.
+
+``` {r, eval=TRUE}
+freq <- seq(from=0, to=1, by=0.01)
+spec.dens <- rep(NA, length(freq))
+
+for (i in 1:length(freq)){
+spec.dens[i] <- 5.12*(1 + cos(2*pi*freq[i])) 
+}
+
+par(mfrow=c(1,2))
+z.spec <- arma.spec( var.noise = 4, log="no", main="")
+plot(freq[1:51], spec.dens[1:51], type="l", ylab="spectrum", xlab="frequency")
+
+```
+
+
+
+3.d) Here the spectral density for {Xt} is  higher for higher frequencies, as the filter here is the a difference, which is a high pass filter.
+
+``` {r, eval=TRUE}
+freq <- seq(from=0, to=1, by=0.01)
+spec.dens <- rep(NA, length(freq))
+
+for (i in 1:length(freq)){
+spec.dens[i] <- 8*(1 - cos(2*pi*freq[i])) 
+}
+
+par(mfrow=c(1,2))
+z.spec <- arma.spec( var.noise = 4, log="no", main="")
+plot(freq[1:51], spec.dens[1:51], type="l", ylab="spectrum", xlab="frequency")
+
+```
+
+
+3.e) Here the spectral density for {Xt} is much higher for lower frequencies, because there is much more smothing going on here, as this is a moving average with a window of 5 observations, which is a low pass filter.
+
+``` {r, eval=TRUE}
+freq <- seq(from=0, to=1, by=0.01)
+spec.dens <- rep(NA, length(freq))
+
+for (i in 1:length(freq)){
+spec.dens[i] <- 0.36 + 4*cos(4*pi*freq[i])*(0.04*cos(4*pi*freq[i]) + 0.12 + 0.2*cos(2*pi*freq[i])) + 4*cos(2*pi*freq[i])*(0.3 + 0.25*cos(2*pi*freq[i])) 
+}
+
+par(mfrow=c(1,2))
+z.spec <- arma.spec( var.noise = 4, log="no", main="")
+plot(freq[1:51], spec.dens[1:51], type="l", ylab="spectrum", xlab="frequency")
+
+```
+
+
+
